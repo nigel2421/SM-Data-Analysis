@@ -3,157 +3,194 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from sklearn.linear_model import LinearRegression
-import etl # Keep this for the fallback mock data
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="AI Property Strategist", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Soil Merchants Analytics", layout="wide", page_icon="🏗️")
 
-st.title("🏢 Real Estate AI Command Center")
-st.markdown("Recommending strategies based on *Inventory Velocity* and *Financial Trends*.")
+# --- CUSTOM CSS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f5f5; }
+    h1 { color: #2c3e50; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- SIDEBAR: DATA LOADER ---
+st.title("🏗️ Soil Merchants: Strategic Intelligence")
+
+# --- SESSION STATE ---
+if 'inventory_db' not in st.session_state:
+    st.session_state.inventory_db = pd.DataFrame()
+if 'finance_db' not in st.session_state:
+    st.session_state.finance_db = pd.DataFrame()
+
+# --- HELPER: CLEAN CURRENCY (Fixes the "Unknown format code" error) ---
+def clean_currency_column(df, col_name):
+    """Removes 'Ksh', commas, and spaces, then converts to float."""
+    if col_name in df.columns:
+        # Force to string first, then clean
+        df[col_name] = df[col_name].astype(str).str.replace('Ksh', '', regex=False)
+        df[col_name] = df[col_name].str.replace(',', '', regex=False)
+        df[col_name] = df[col_name].str.replace(' ', '', regex=False)
+        # Convert to numeric, turning errors (like empty text) into 0
+        df[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0)
+    return df
+
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("🎛️ Control Center")
-    st.write("Upload your actual data below.")
+    st.header("🎛️ Data Control Center")
     
-    uploaded_inventory = st.file_uploader("Upload Inventory (CSV)", type=['csv'])
-    uploaded_finance = st.file_uploader("Upload Transactions (CSV)", type=['csv'])
-    
-    data_source = "Mock"
-    
-    if uploaded_inventory and uploaded_finance:
-        try:
-            df_props = pd.read_csv(uploaded_inventory)
-            df_pay = pd.read_csv(uploaded_finance)
-            # Basic cleaning to ensure dates are dates
-            df_pay['Transaction_Date'] = pd.to_datetime(df_pay['Transaction_Date'])
-            data_source = "Real"
-            st.success("✅ Real Data Loaded")
-        except Exception as e:
-            st.error(f"Error reading files: {e}")
-            st.stop()
-    else:
-        st.info("Using Simulation Data (Upload files to override)")
-        # Fallback to the mock data generator we built earlier
-        df_props, df_pay = etl.generate_real_estate_data()
-        # Rename columns to match the 'Real' schema for consistency
-        df_pay.rename(columns={'date': 'Transaction_Date'}, inplace=True)
-        data_source = "Mock"
+    # RESET BUTTON (Critical for fixing stuck session state)
+    if st.button("⚠️ Reset / Clear All Data"):
+        st.session_state.inventory_db = pd.DataFrame()
+        st.session_state.finance_db = pd.DataFrame()
+        st.rerun()
 
-# --- AI ENGINE: PREDICTION FUNCTIONS ---
-def run_revenue_prediction(payment_df):
-    """
-    Uses Linear Regression to predict the next 3 months of revenue
-    based on historical transaction data.
-    """
-    # 1. Aggregate revenue by month
-    monthly_rev = payment_df[payment_df['status']=='Paid'].set_index('Transaction_Date').resample('M')['amount'].sum().reset_index()
-    monthly_rev['Month_Index'] = range(len(monthly_rev))
+    # UPLOADERS
+    st.subheader("Upload Zoho Reports")
+    uploaded_inv = st.file_uploader("Inventory (CSV)", type=['csv'])
+    uploaded_fin = st.file_uploader("Finance (CSV)", type=['csv'])
     
-    if len(monthly_rev) < 2:
-        return None, None # Not enough data to predict
+    if st.button("🚀 Process & Merge Data"):
+        
+        # --- 1. PROCESS INVENTORY ---
+        if uploaded_inv:
+            try:
+                new_inv = pd.read_csv(uploaded_inv)
+                new_inv.columns = new_inv.columns.str.strip().str.title() # Clean headers
+                
+                # Standardize Column Names
+                inv_map = {
+                    'Item Name': 'Item Name',
+                    'Sku': 'SKU', 'Stock On Hand': 'Stock On Hand',
+                    'Selling Rate': 'Selling Rate', 'Rate': 'Selling Rate', 'Price': 'Selling Rate'
+                }
+                new_inv.rename(columns=inv_map, inplace=True)
+                
+                # FIX: Clean Numbers (Remove Ksh/Commas)
+                new_inv = clean_currency_column(new_inv, 'Selling Rate')
+                new_inv = clean_currency_column(new_inv, 'Stock On Hand')
 
-    # 2. Train the Model (The AI Part)
-    X = monthly_rev[['Month_Index']] # Input: Time
-    y = monthly_rev['amount']        # Output: Money
-    
-    model = LinearRegression()
-    model.fit(X, y)
-    
-    # 3. Predict Future (Next 3 months)
-    last_index = monthly_rev['Month_Index'].max()
-    future_indexes = np.array([[last_index + 1], [last_index + 2], [last_index + 3]])
-    predictions = model.predict(future_indexes)
-    
-    return monthly_rev, predictions
+                # Merge Logic
+                if not st.session_state.inventory_db.empty and 'SKU' in new_inv.columns:
+                    existing = st.session_state.inventory_db
+                    if 'SKU' in existing.columns:
+                        existing = existing[~existing['SKU'].isin(new_inv['SKU'])]
+                    st.session_state.inventory_db = pd.concat([existing, new_inv], ignore_index=True)
+                else:
+                    st.session_state.inventory_db = new_inv
+                st.success(f"Inventory: {len(new_inv)} records loaded.")
+            except Exception as e:
+                st.error(f"Inventory Error: {e}")
 
-# --- DASHBOARD TABS ---
-tab1, tab2, tab3 = st.tabs(["📊 Executive Overview", "🤖 AI Forecast & Insights", "📂 Data Inspector"])
+        # --- 2. PROCESS FINANCE ---
+        if uploaded_fin:
+            try:
+                new_fin = pd.read_csv(uploaded_fin)
+                new_fin.columns = new_fin.columns.str.strip().str.title()
+                
+                # Standardize Column Names (Fixes KeyError: Status)
+                fin_map = {
+                    'Invoice Status': 'Status', 'Payment Status': 'Status',
+                    'Invoice Amount': 'Total', 'Balance': 'Total', 'Amount': 'Total',
+                    'Invoice Date': 'Invoice Date', 'Date': 'Invoice Date'
+                }
+                new_fin.rename(columns=fin_map, inplace=True)
+
+                # EMERGENCY FIX: If 'Status' still missing, create it
+                if 'Status' not in new_fin.columns:
+                    new_fin['Status'] = 'Paid' # Default value
+                
+                # FIX: Clean Numbers (Remove Ksh/Commas)
+                new_fin = clean_currency_column(new_fin, 'Total')
+
+                # FIX: Dates
+                if 'Invoice Date' in new_fin.columns:
+                    new_fin['Invoice Date'] = pd.to_datetime(new_fin['Invoice Date'], dayfirst=True, errors='coerce')
+                    new_fin = new_fin.dropna(subset=['Invoice Date'])
+                
+                # Merge Logic
+                if not st.session_state.finance_db.empty and 'Invoice Number' in new_fin.columns:
+                    existing = st.session_state.finance_db[~st.session_state.finance_db['Invoice Number'].isin(new_fin['Invoice Number'])]
+                    st.session_state.finance_db = pd.concat([existing, new_fin], ignore_index=True)
+                else:
+                    st.session_state.finance_db = new_fin
+                st.success(f"Finance: {len(new_fin)} records loaded.")
+            except Exception as e:
+                st.error(f"Finance Error: {e}")
+
+# --- DASHBOARD ---
+if st.session_state.inventory_db.empty or st.session_state.finance_db.empty:
+    st.info("👋 Waiting for data. Please upload files in the sidebar.")
+    st.stop()
+
+df_inv = st.session_state.inventory_db
+df_fin = st.session_state.finance_db
+
+tab1, tab2, tab3 = st.tabs(["📊 Overview", "🤖 AI Forecast", "📂 Data"])
 
 with tab1:
-    # KPI ROW
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader("Financial Snapshot")
     
-    total_rev = df_pay[df_pay['status']=='Paid']['amount'].sum()
-    total_sales = len(df_props[(df_props['category']=='Sale') & (df_props['status']=='Sold')])
-    occupancy = len(df_props[(df_props['category']=='Rent') & (df_props['status']=='Occupied')])
-    total_rentals = len(df_props[df_props['category']=='Rent'])
-    occ_rate = (occupancy/total_rentals * 100) if total_rentals > 0 else 0
+    # Safe Calculations
+    total_revenue = 0
+    pending_revenue = 0
     
-    col1.metric("Total Revenue Collected", f"${total_rev:,.0f}")
-    col2.metric("Sales Closed", total_sales)
-    col3.metric("Rental Occupancy", f"{occ_rate:.1f}%")
-    col4.metric("Data Source", data_source)
+    if 'Status' in df_fin.columns and 'Total' in df_fin.columns:
+        # Ensure 'Total' is numeric before summing
+        total_revenue = df_fin[df_fin['Status'] == 'Paid']['Total'].sum()
+        pending_revenue = df_fin[df_fin['Status'] != 'Paid']['Total'].sum()
+    
+    avail_stock = 0
+    if 'Stock On Hand' in df_inv.columns:
+        avail_stock = df_inv['Stock On Hand'].sum()
+    
+    total_val = 0
+    if 'Selling Rate' in df_inv.columns:
+        total_val = df_inv['Selling Rate'].sum()
 
-    # REVENUE CHART
-    st.subheader("Cash Flow Trend")
-    rev_trend = df_pay.groupby(pd.Grouper(key='Transaction_Date', freq='M'))['amount'].sum().reset_index()
-    fig_trend = px.line(rev_trend, x='Transaction_Date', y='amount', title="Monthly Revenue Inflow", markers=True)
-    st.plotly_chart(fig_trend, use_container_width=True)
+    # Display Metrics
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Collected Revenue", f"Ksh {total_revenue:,.0f}")
+    c2.metric("Pending/Overdue", f"Ksh {pending_revenue:,.0f}")
+    c3.metric("Stock Available", f"{avail_stock:,.0f}")
+    c4.metric("Portfolio Value", f"Ksh {total_val:,.0f}")
+
+    # Charts
+    c_left, c_right = st.columns(2)
+    with c_left:
+        if 'Invoice Date' in df_fin.columns and 'Total' in df_fin.columns:
+            st.subheader("Cash Flow")
+            trend = df_fin.groupby(pd.Grouper(key='Invoice Date', freq='M'))['Total'].sum().reset_index()
+            st.plotly_chart(px.bar(trend, x='Invoice Date', y='Total'), use_container_width=True)
+            
+    with c_right:
+        if 'Customer Name' in df_fin.columns:
+            st.subheader("Top Customers")
+            top = df_fin.groupby('Customer Name')['Total'].sum().nlargest(10).reset_index()
+            st.plotly_chart(px.pie(top, values='Total', names='Customer Name', hole=0.4), use_container_width=True)
 
 with tab2:
-    st.header("🤖 AI Analysis & Feedback")
-    
-    col_ai_left, col_ai_right = st.columns([2, 1])
-    
-    with col_ai_left:
-        st.subheader("Revenue Forecasting (Linear Regression)")
-        hist_data, predictions = run_revenue_prediction(df_pay)
+    st.header("🤖 Revenue Prediction")
+    if len(df_fin) > 5 and 'Invoice Date' in df_fin.columns:
+        m_rev = df_fin[df_fin['Status']=='Paid'].set_index('Invoice Date').resample('M')['Total'].sum().reset_index()
+        m_rev['Idx'] = range(len(m_rev))
         
-        if hist_data is not None:
-            # Create a dataframe for the future
-            last_date = hist_data['Transaction_Date'].max()
-            future_dates = [last_date + pd.DateOffset(months=i) for i in range(1, 4)]
+        if len(m_rev) > 2:
+            model = LinearRegression()
+            model.fit(m_rev[['Idx']], m_rev['Total'])
+            last_idx = m_rev['Idx'].max()
+            future_idx = np.array([[last_idx+1], [last_idx+2], [last_idx+3]])
+            preds = model.predict(future_idx)
             
-            df_future = pd.DataFrame({
-                'Transaction_Date': future_dates,
-                'amount': predictions,
-                'Type': 'AI Prediction'
-            })
-            hist_data['Type'] = 'Actual'
+            last_date = m_rev['Invoice Date'].max()
+            f_dates = [last_date + pd.DateOffset(months=i) for i in range(1, 4)]
+            df_fut = pd.DataFrame({'Invoice Date': f_dates, 'Total': preds, 'Type': 'Forecast'})
+            m_rev['Type'] = 'Actual'
             
-            # Combine for charting
-            df_combined = pd.concat([hist_data[['Transaction_Date', 'amount', 'Type']], df_future])
-            
-            fig_pred = px.line(df_combined, x='Transaction_Date', y='amount', color='Type', 
-                               line_dash='Type', markers=True, title="Projected vs Actual Revenue")
-            st.plotly_chart(fig_pred, use_container_width=True)
-            
-            projected_total = sum(predictions)
-            st.info(f"💡 **AI Projection:** Based on your current trajectory, the model predicts **${projected_total:,.0f}** in revenue over the next 90 days.")
-        else:
-            st.warning("Not enough historical data to generate predictions.")
-
-    with col_ai_right:
-        st.subheader("💡 Strategic Recommendations")
-        
-        # LOGIC-BASED "AI" FEEDBACK
-        recommendations = []
-        
-        # 1. Check Sales Velocity
-        unsold_land = len(df_props[(df_props['project'].str.contains('Land')) & (df_props['status']=='Available')])
-        if unsold_land > 10:
-            recommendations.append(f"⚠️ **High Land Inventory:** You have {unsold_land} plots unsold. Consider a 'Flash Sale' marketing campaign to unlock capital.")
-            
-        # 2. Check Rental Arrears
-        late_payments = len(df_pay[(df_pay['type']=='Rent') & (df_pay['status']=='Late')])
-        if late_payments > 5:
-            recommendations.append(f"⚠️ **Cash Flow Risk:** {late_payments} rental payments were late recently. Direct Property Management to enforce strict collection policies.")
-            
-        # 3. Check Occupancy
-        if occ_rate < 85:
-             recommendations.append(f"📉 **Low Occupancy ({occ_rate:.1f}%):** Your rentals are underperforming. Review pricing strategy or renovation needs.")
-        else:
-             recommendations.append(f"✅ **Strong Occupancy ({occ_rate:.1f}%):** You have pricing power. Consider increasing rents by 3-5% on lease renewals.")
-
-        # Display recommendations
-        for rec in recommendations:
-            st.write(rec)
-            st.markdown("---")
+            st.plotly_chart(px.line(pd.concat([m_rev, df_fut]), x='Invoice Date', y='Total', color='Type'), use_container_width=True)
+            st.success(f"Predicted Next Month: Ksh {preds[0]:,.0f}")
 
 with tab3:
-    st.write("Check your raw data here to ensure accuracy.")
-    st.write("### Property Inventory")
-    st.dataframe(df_props)
-    st.write("### Financial Transactions")
-    st.dataframe(df_pay)
+    st.dataframe(df_inv)
+    st.dataframe(df_fin)
