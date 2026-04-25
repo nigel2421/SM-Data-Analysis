@@ -1,0 +1,8 @@
+from django.contrib import admin
+from .models import Tenant
+
+@admin.register(Tenant)
+class TenantAdmin(admin.ModelAdmin):
+    list_display = ('name', 'subdomain', 'created_at')
+    filter_horizontal = ('admins',)
+    search_fields = ('name', 'subdomain')

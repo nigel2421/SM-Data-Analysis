@@ -1,0 +1,33 @@
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor',
+              test: /node_modules[\\/](react|react-dom)[\\/]/,
+              priority: 10
+            },
+            {
+              name: 'firebase',
+              test: /node_modules[\\/]firebase[\\/]/,
+              priority: 10
+            },
+            {
+              name: 'icons',
+              test: /node_modules[\\/]lucide-react[\\/]/,
+              priority: 10
+            }
+          ]
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000
+  }
+})

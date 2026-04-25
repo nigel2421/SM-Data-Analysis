@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map-Cleaner Interactive Editor</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --primary: #38bdf8;
+            --accent: #f472b6;
+            --text: #f8fafc;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        header {
+            padding: 1rem 2rem;
+            background: var(--surface);
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 300px;
+            background: var(--surface);
+            padding: 1rem;
+            border-right: 1px solid #334155;
+            overflow-y: auto;
+        }
+        .editor-area {
+            flex: 1;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            background: #000;
+        }
+        .canvas-container {
+            position: relative;
+            max-width: 100%;
+            max-height: 80vh;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            overflow: auto;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+        #baseImg {
+            max-width: 100%;
+            display: block;
+        }
+        .controls {
+            margin-top: 1rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            padding: 1rem;
+            background: var(--surface);
+            border-radius: 0.5rem;
+            justify-content: center;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 10px;
+            border-right: 1px solid #334155;
+        }
+        button {
+            padding: 0.6rem 1.2rem;
+            border-radius: 0.5rem;
+            border: none;
+            background: var(--primary);
+            color: var(--bg);
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button.secondary { background: #475569; color: white; }
+        button.accent { background: var(--accent); color: white; }
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        .image-item {
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            background: #334155;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .image-item:hover { background: #475569; }
+        #status { padding: 1rem; color: var(--primary); font-weight: bold; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Map-Cleaner AI</h1>
+        <div id="status">Ready</div>
+    </header>
+    <div class="main-container">
+        <div class="sidebar">
+            <h3>Raw Maps</h3>
+            <div id="imageList"></div>
+        </div>
+        <div class="editor-area">
+            <div class="canvas-container" id="container">
+                <img id="baseImg" src="" alt="Select an image from sidebar">
+                <canvas id="paintCanvas"></canvas>
+            </div>
+            <div class="controls">
+                <div class="control-group">
+                    <span>Brush:</span>
+                    <input type="range" id="brushSize" min="1" max="150" value="20">
+                </div>
+                <button onclick="rotateImage()" class="secondary">Rotate 90°</button>
+                <button onclick="cleanBackground()" class="secondary">Clean BG</button>
+                <button onclick="despeckle()" class="secondary">Remove Dots</button>
+                <button onclick="enhanceText()" class="secondary">Enhance Text</button>
+                <button onclick="saveManual()" class="accent">Inpaint Marked Areas</button>
+                <button onclick="clearCanvas()" class="secondary">Clear Marks</button>
+                <button id="downloadBtn" style="display:none;" class="primary">Download Final</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFile = '';
+        let processedFile = '';
+        const canvas = document.getElementById('paintCanvas');
+        const ctx = canvas.getContext('2d');
+        const baseImg = document.getElementById('baseImg');
+        const brushSizeInput = document.getElementById('brushSize');
+        let painting = false;
+        let rotation = 0;
+
+        async function loadImages() {
+            const res = await fetch('/api/images');
+            const files = await res.json();
+            const list = document.getElementById('imageList');
+            list.innerHTML = '';
+            files.forEach(f => {
+                const div = document.createElement('div');
+                div.className = 'image-item';
+                div.innerText = f;
+                div.onclick = () => selectImage(f);
+                list.appendChild(div);
+            });
+        }
+
+        function selectImage(f) {
+            currentFile = f;
+            processedFile = '';
+            rotation = 0;
+            baseImg.style.transform = `rotate(${rotation}deg)`;
+            baseImg.src = `/data/raw/${f}`;
+            document.getElementById('downloadBtn').style.display = 'none';
+            baseImg.onload = () => {
+                syncCanvasSize();
+                clearCanvas();
+            };
+        }
+
+        function syncCanvasSize() {
+            canvas.width = baseImg.clientWidth;
+            canvas.height = baseImg.clientHeight;
+            canvas.style.width = baseImg.clientWidth + 'px';
+            canvas.style.height = baseImg.clientHeight + 'px';
+        }
+
+        function rotateImage() {
+            rotation = (rotation + 90) % 360;
+            baseImg.style.transform = `rotate(${rotation}deg)`;
+            document.getElementById('status').innerText = `Rotated to ${rotation}°`;
+        }
+
+        canvas.addEventListener('mousedown', (e) => { painting = true; draw(e); });
+        canvas.addEventListener('mouseup', () => { painting = false; ctx.beginPath(); });
+        canvas.addEventListener('mousemove', draw);
+
+        function draw(e) {
+            if (!painting) return;
+            ctx.lineWidth = brushSizeInput.value;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            const rect = canvas.getBoundingClientRect();
+            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+
+        function clearCanvas() { ctx.clearRect(0, 0, canvas.width, canvas.height); }
+
+        async function apiCall(endpoint, body) {
+            document.getElementById('status').innerText = 'Working...';
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            baseImg.src = `/data/processed/${data.output}?t=${Date.now()}`;
+            processedFile = data.output;
+            document.getElementById('status').innerText = 'Success!';
+            showDownload(data.output);
+            return data;
+        }
+
+        function showDownload(filename) {
+            const btn = document.getElementById('downloadBtn');
+            btn.style.display = 'block';
+            btn.onclick = () => window.open(`/data/processed/${filename}`, '_blank');
+        }
+
+        function cleanBackground() { apiCall('/api/process', {filename: currentFile}); }
+        function enhanceText() { apiCall('/api/enhance', {filename: processedFile || currentFile}); }
+        function despeckle() { apiCall('/api/despeckle', {filename: processedFile || currentFile}); }
+
+        async function saveManual() {
+            if (!currentFile) return;
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = baseImg.naturalWidth;
+            tempCanvas.height = baseImg.naturalHeight;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+            
+            await apiCall('/api/save_manual', {
+                filename: currentFile,
+                current_image: processedFile,
+                mask_base64: tempCanvas.toDataURL('image/png'),
+                rotation: rotation
+            });
+            clearCanvas();
+        }
+
+        loadImages();
+    </script>
+</body>
+</html>

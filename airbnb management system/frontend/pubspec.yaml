@@ -1,0 +1,24 @@
+name: mogul_pms
+description: A mobile-first Property Management System for Airbnb owners.
+version: 1.0.0+1
+
+environment:
+  sdk: ">=2.17.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_bloc: ^8.1.0
+  google_maps_flutter: ^2.2.1
+  http: ^0.13.5
+  intl: ^0.17.0
+  syncfusion_flutter_calendar: ^20.2.36
+  firebase_core: ^1.24.0
+  firebase_messaging: ^11.4.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
